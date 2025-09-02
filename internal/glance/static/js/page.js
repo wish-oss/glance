@@ -6,7 +6,15 @@ import { elem, find, findAll } from './templating.js';
 async function fetchPageContent(pageData) {
     // TODO: handle non 200 status codes/time outs
     // TODO: add retries
-    const response = await fetch(`${pageData.baseURL}/api/pages/${pageData.slug}/content/`);
+    let url = `${pageData.baseURL}/api/pages/${pageData.slug}/content/`;
+    let response = await fetch(url);
+    
+    // If the regular URL fails and we have a user, try the user-specific URL
+    if (!response.ok && pageData.user) {
+        url = `${pageData.baseURL}/api/users/${pageData.user}/pages/${pageData.slug}/content/`;
+        response = await fetch(url);
+    }
+    
     const content = await response.text();
 
     return content;

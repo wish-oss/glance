@@ -279,6 +279,7 @@ func (a *application) resolveUserDefinedAssetPath(path string) string {
 
 type templateRequestData struct {
 	Theme *themeProperties
+	User  string
 }
 
 type templateData struct {
@@ -436,6 +437,15 @@ func (a *application) VersionedAssetPath(asset string) string {
 func (a *application) server() (func() error, func() error) {
 	mux := http.NewServeMux()
 
+	// User-specific routes
+	mux.HandleFunc("GET /users/{user}/{$}", a.handleUserPageRequest)
+	mux.HandleFunc("GET /users/{user}/{page}", a.handleUserPageRequest)
+	mux.HandleFunc("GET /api/users/{user}/pages/{$}", a.handleUserPageContentRequest)
+	mux.HandleFunc("GET /api/users/{user}/pages/{page}", a.handleUserPageContentRequest)
+	mux.HandleFunc("GET /api/users/{user}/pages/{page}/content/{$}", a.handleUserPageContentRequest)
+	mux.HandleFunc("/api/users/{user}/widgets/{widget}/{path...}", a.handleUserWidgetRequest)
+
+	// Default routes
 	mux.HandleFunc("GET /{$}", a.handlePageRequest)
 	mux.HandleFunc("GET /{page}", a.handlePageRequest)
 
@@ -513,4 +523,92 @@ func (a *application) server() (func() error, func() error) {
 	}
 
 	return start, stop
+}
+
+// Helper function to load user-specific config
+func loadUserConfig(configPath string) (*config, error) {
+	contents, _, err := parseYAMLIncludes(configPath)
+	if err != nil {
+		return nil, err
+	}
+	return newConfigFromYAML(contents)
+}
+
+func (a *application) handleUserPageRequest(w http.ResponseWriter, r *http.Request) {
+	user := r.PathValue("user")
+	configPath := filepath.Join(a.Config.Server.AssetsPath, "users", user, "glance.yml")
+	config, err := loadUserConfig(configPath)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(fmt.Sprintf("User configuration not found for: %s", user)))
+		return
+	}
+
+	if len(config.Pages) == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(fmt.Sprintf("No pages defined in configuration for user: %s", user)))
+		return
+	}
+
+	userApp, err := newApplication(config)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf("Error initializing user configuration: %v", err)))
+		return
+	}
+
+	data := templateData{
+		Page: userApp.slugToPage[r.PathValue("page")],
+		App:  userApp,
+		Request: templateRequestData{
+			User: user,
+		},
+	}
+	a.populateTemplateRequestData(&data.Request, r)
+
+	var responseBytes bytes.Buffer
+	err = pageTemplate.Execute(&responseBytes, data)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	w.Write(responseBytes.Bytes())
+}
+
+func (a *application) handleUserPageContentRequest(w http.ResponseWriter, r *http.Request) {
+	user := r.PathValue("user")
+	configPath := filepath.Join(a.Config.Server.AssetsPath, "users", user, "glance.yml")
+	config, err := loadUserConfig(configPath)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(fmt.Sprintf("User configuration not found for: %s", user)))
+		return
+	}
+	userApp, err := newApplication(config)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf("Error initializing user configuration: %v", err)))
+		return
+	}
+	userApp.handlePageContentRequest(w, r)
+}
+
+func (a *application) handleUserWidgetRequest(w http.ResponseWriter, r *http.Request) {
+	user := r.PathValue("user")
+	configPath := filepath.Join(a.Config.Server.AssetsPath, "users", user, "glance.yml")
+	config, err := loadUserConfig(configPath)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(fmt.Sprintf("User configuration not found for: %s", user)))
+		return
+	}
+	userApp, err := newApplication(config)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf("Error initializing user configuration: %v", err)))
+		return
+	}
+	userApp.handleWidgetRequest(w, r)
 }
